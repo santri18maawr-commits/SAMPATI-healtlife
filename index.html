@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SAMPATI NFC CLOUD - Inovasi Sampah Jadi Layanan Kesehatan</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-900 text-white font-sans min-h-screen">
+
+<header class="bg-slate-950 p-4 border-b border-slate-800 sticky top-0">
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-3">
+<div class="p-2 bg-cyan-600 rounded-lg"><i class="fa-solid fa-id-card"></i></div>
+<div><h1 class="font-bold text-lg">SAMPATI NFC</h1><p class="text-xs text-cyan-400">Google Cloud</p></div>
+</div>
+<button onclick="kembali()" id="btn-back" class="hidden bg-slate-700 px-3 py-1 rounded text-xs">← Menu</button>
+</div>
+</header>
+
+<div class="p-4 text-center">
+<p class="text-xs text-slate-400">KONVERSI: Rp 100 = 1 POIN</p>
+</div>
+
+<div id="menu" class="p-4 grid grid-cols-2 gap-3">
+<button onclick="buka('admin')" class="bg-indigo-600 p-4 rounded-xl font-bold">ADMIN<br><span class="text-xs font-normal">Daftar</span></button>
+<button onclick="buka('kios')" class="bg-emerald-600 p-4 rounded-xl font-bold">KIOS<br><span class="text-xs font-normal">Cek</span></button>
+<button onclick="cekPass('sampah')" class="bg-amber-600 p-4 rounded-xl font-bold">SAMPAH<br><span class="text-xs font-normal">+Poin</span></button>
+<button onclick="cekPass('medis')" class="bg-rose-600 p-4 rounded-xl font-bold">PUSKESMAS<br><span class="text-xs font-normal">-Poin</span></button>
+</div>
+
+<div id="ws" class="hidden p-4"></div>
+
+<div id="pass-modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center">
+<div class="bg-slate-800 p-6 rounded-xl w-64">
+<h3 class="font-bold text-center mb-3" id="pass-title">PIN</h3>
+<input id="pass-input" type="password" placeholder="PIN" class="w-full bg-slate-900 p-3 rounded mb-3 text-center text-xl">
+<div class="flex gap-2">
+<button onclick="bukaMenu()" class="flex-1 bg-cyan-600 p-3 rounded">OK</button>
+<button onclick="tutupPass()" class="bg-slate-700 p-3 rounded">Batal</button>
+</div>
+</div>
+</div>
+
+<div id="nfc-panel" class="hidden fixed inset-0 bg-black/90 z-50 flex items-center justify-center">
+<div class="bg-slate-800 p-8 rounded-2xl text-center">
+<i class="fa-solid fa-wifi animate-pulse text-5xl text-cyan-400 mb-4"></i>
+<p class="text-cyan-400 font-bold text-lg">TEMPELKAN KARTU NFC</p>
+<p class="text-xs text-slate-400 mt-2 mb-4">Dekatkan KTP ke HP</p>
+<button onclick="tutupNFC()" class="bg-slate-700 px-6 py-2 rounded">Batal</button>
+</div>
+</div>
+
+<div id="logs" class="p-4 text-xs text-slate-500"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+<script>
+const FIREBASE_URL = "https://sampati-nfc-default-rtdb.asia-southeast1.firebasedatabase.app/";
+const KONVERSI = 100;
+
+firebase.initializeApp({databaseURL: FIREBASE_URL});
+const db = firebase.database();
+let nfcCtrl = null;
+let menuTujuan = '';
+let targetNFC = '';
+
+const PIN = { sampah: '4321', medis: '8765' };
+
+function log(x){
+document.getElementById('logs').innerHTML = '['+new Date().toLocaleTimeString()+'] '+x+'<br>'+document.getElementById('logs').innerHTML;
+}
+
+function cekPass(menu){
+menuTujuan = menu;
+document.getElementById('pass-modal').classList.remove('hidden');
+document.getElementById('pass-input').value = '';
+document.getElementById('pass-input').focus();
+document.getElementById('pass-title').innerText = menu == 'sampah' ? 'PIN SAMPAH' : 'PIN PUSKESMAS';
+}
+
+function tutupPass(){
+document.getElementById('pass-modal').classList.add('hidden');
+}
+
+function bukaMenu(){
+let pass = document.getElementById('pass-input').value;
+if(menuTujuan == 'sampah' && pass == PIN.sampah){
+tutupPass();
+buka('sampah');
+}
+else if(menuTujuan == 'medis' && pass == PIN.medis){
+tutupPass();
+buka('medis');
+}
+else {
+alert('PIN SALAH!');
+}
+}
+
+function kembali(){
+document.getElementById('menu').classList.remove('hidden');
+document.getElementById('ws').classList.add('hidden');
+document.getElementById('btn-back').classList.add('hidden');
+document.getElementById('ws').innerHTML = '';
+if(nfcCtrl){
+nfcCtrl.abort();
+nfcCtrl = null;
+}
+}
+
+function aktifkanNFC(target){
+targetNFC = target;
+document.getElementById('nfc-panel').classList.remove('hidden');
+log('[NFC] Menunggu kartu...');
+if (!('NDEFReader' in window)) {
+alert('Browser tidak mendukung NFC! Gunakan Chrome Android.');
+tutupNFC();
+return;
+}
+(async () => {
+try {
+nfcCtrl = new AbortController();
+const ndef = new NDEFReader();
+await ndef.scan({ signal: nfcCtrl.signal });
+ndef.onreading = event => {
+for (let record of event.message.records) {
+if (record.recordType === "text") {
+let text = new TextDecoder(record.encoding).decode(record.data).trim();
+document.getElementById(targetNFC).value = text;
+log('[NFC] Terbaca: ' + text);
+tutupNFC();
+cekNIK(text, targetNFC);
+break;
+}
+}
+};
+} catch(e) {
+log('[NFC] Error: ' + e.message);
+tutupNFC();
+}
+})();
+}
+
+function tutupNFC(){
+document.getElementById('nfc-panel').classList.add('hidden');
+if(nfcCtrl){
+nfcCtrl.abort();
+nfcCtrl = null;
+}
+}
+
+function buka(menu){
+document.getElementById('menu').classList.add('hidden');
+document.getElementById('ws').classList.remove('hidden');
+document.getElementById('btn-back').classList.remove('hidden');
+let w = document.getElementById('ws');
+
+if(menu == 'admin'){
+w.innerHTML = '<div class="bg-slate-800 p-4 rounded-xl">' +
+'<h2 class="font-bold text-indigo-400 mb-3">DAFTAR WARGA</h2>' +
+'<div class="flex gap-2 mb-2">' +
+'<input id="nik" oninput="cekNIK(this.value)" placeholder="NIK 16 Digit" class="flex-1 bg-slate-900 p-3 rounded text-white">' +
+'<button onclick="aktifkanNFC(\'nik\')" class="bg-cyan-600 px-3 rounded"><i class="fa-solid fa-id-card"></i></button>' +
+'</div>' +
+'<div id="nik-status" class="hidden text-xs font-bold mb-2"></div>' +
+'<input id="nama" placeholder="Nama Lengkap" class="w-full bg-slate-900 p-3 rounded mb-4 uppercase text-white">' +
+'<button onclick="daftar()" class="w-full bg-indigo-600 p-3 rounded font-bold" id="btn-daftar">DAFTAR</button>' +
+'</div>';
+log('[ADMIN] Buka');
+}
+
+if(menu == 'kios'){
+w.innerHTML = '<div class="bg-slate-800 p-4 rounded-xl">' +
+'<h2 class="font-bold text-emerald-400 mb-3">CEK DATA</h2>' +
+'<div class="flex gap-2 mb-3">' +
+'<input id="cari" oninput="cekNIK(this.value,\'kios\')" placeholder="NIK" class="flex-1 bg-slate-900 p-3 rounded text-white">' +
+'<button onclick="aktifkanNFC(\'cari\')" class="bg-cyan-600 px-3 rounded"><i class="fa-solid fa-id-card"></i></button>' +
+'</div>' +
+'<div id="kios-status" class="hidden text-xs font-bold mb-2"></div>' +
+'<button onclick="cek()" class="w-full bg-emerald-600 p-3 rounded font-bold mb-3">CEK</button>' +
+'<div id="hasil" class="hidden mt-3 p-3 bg-slate-700 rounded">' +
+'<p id="hnama" class="font-bold text-lg"></p>' +
+'<p id="hsaldo" class="text-amber-400 text-xl"></p>' +
+'<p id="hrp" class="text-emerald-400"></p>' +
+'</div>' +
+'</div>';
+log('[KIOS] Buka');
+}
+
+if(menu == 'sampah'){
+w.innerHTML = '<div class="bg-slate-800 p-4 rounded-xl">' +
+'<h2 class="font-bold text-amber-400 mb-3">SETOR (+)</h2>' +
+'<div class="flex gap-2 mb-2">' +
+'<input id="snik" oninput="cekNIK(this.value,\'sampah\')" placeholder="NIK" class="flex-1 bg-slate-900 p-3 rounded text-white">' +
+'<button onclick="aktifkanNFC(\'snik\')" class="bg-cyan-600 px-3 rounded"><i class="fa-solid fa-id-card"></i></button>' +
+'</div>' +
+'<div id="sampah-status" class="hidden text-xs font-bold mb-2"></div>' +
+'<input id="rupiah" placeholder="Rupiah" type="number" class="w-full bg-slate-900 p-3 rounded mb-2">' +
+'<p class="text-xs text-center mb-2">+<span id="prev-plus" class="text-amber-400">0</span> POIN</p>' +
+'<button onclick="setor()" class="w-full bg-amber-600 p-3 rounded font-bold">SIMPAN (+)</button>' +
+'</div>';
+document.getElementById('rupiah').addEventListener('input',function(){
+document.getElementById('prev-plus').innerText = Math.floor(parseInt(this.value)/100);
+});
+log('[SAMPAH] Buka');
+}
+
+if(menu == 'medis'){
+w.innerHTML = '<div class="bg-slate-800 p-4 rounded-xl">' +
+'<h2 class="font-bold text-rose-400 mb-3">PUSKESMAS (-)</h2>' +
+'<div class="flex gap-2 mb-2">' +
+'<input id="mnik" oninput="cekNIK(this.value,\'medis\')" placeholder="NIK" class="flex-1 bg-slate-900 p-3 rounded text-white">' +
+'<button onclick="aktifkanNFC(\'mnik\')" class="bg-cyan-600 px-3 rounded"><i class="fa-solid fa-id-card"></i></button>' +
+'</div>' +
+'<div id="medis-status" class="hidden text-xs font-bold mb-2"></div>' +
+'<button onclick="cekMedis()" class="w-full bg-slate-700 p-2 rounded text-xs mb-2">CEK SALDO</button>' +
+'<div id="medis-info" class="hidden">' +
+'<p id="medis-saldo" class="text-white font-bold mb-2"></p>' +
+'<input id="biaya" placeholder="Biaya" type="number" class="w-full bg-slate-900 p-3 rounded mb-2">' +
+'<p class="text-xs text-center mb-2">-<span id="prev-min" class="text-rose-400">0</span> POIN</p>' +
+'<textarea id="catatan" placeholder="Diagnosa" class="w-full bg-slate-900 p-3 rounded mb-3 h-20"></textarea>' +
+'<button onclick="bayar()" class="w-full bg-rose-600 p-3 rounded font-bold">BAYAR (-)</button>' +
+'</div>' +
+'</div>';
+document.getElementById('biaya').addEventListener('input',function(){
+document.getElementById('prev-min').innerText = Math.floor(parseInt(this.value)/100);
+});
+log('[MEDIS] Buka');
+}
+}
+
+function cekNIK(nik, menu){
+if(nik.length < 16) return;
+db.ref('warga/'+nik).get().then(s => {
+let statusId = menu ? menu+'-status' : 'nik-status';
+let statusEl = document.getElementById(statusId);
+if(!statusEl) return;
+if(s.exists()){
+let d = s.val();
+if(menu == 'admin'){
+statusEl.innerHTML = 'NIK SUDAH TERDAFTAR: ' + d.nama;
+statusEl.className = 'text-xs font-bold mb-2 text-red-400';
+document.getElementById('btn-daftar').innerText = 'UPDATE';
+document.getElementById('btn-daftar').className = 'w-full bg-orange-600 p-3 rounded font-bold';
+}else{
+statusEl.innerHTML = 'DITEMUKAN: ' + d.nama + ' (' + d.saldo + ' POIN)';
+statusEl.className = 'text-xs font-bold mb-2 text-green-400';
+}
+}else{
+statusEl.innerHTML = 'NIK BELUM TERDAFTAR';
+statusEl.className = 'text-xs font-bold mb-2 text-cyan-400';
+if(menu == 'admin'){
+document.getElementById('btn-daftar').innerText = 'DAFTAR';
+document.getElementById('btn-daftar').className = 'w-full bg-indigo-600 p-3 rounded font-bold';
+}
+}
+});
+}
+
+function daftar(){
+let nik = document.getElementById('nik').value.trim();
+let nama = document.getElementById('nama').value.trim().toUpperCase();
+if(nik.length != 16 || !nama) return alert('Isi lengkap!');
+db.ref('warga/'+nik).set({nama:nama, saldo:0}).then(function(){
+alert('Berhasil! ' + nama);
+log('[DAFTAR] ' + nik);
+kembali();
+}).catch(function(e){
+alert('Gagal: ' + e.message);
+});
+}
+
+function cek(){
+let nik = document.getElementById('cari').value.trim();
+if(nik.length != 16) return alert('NIK 16 digit!');
+db.ref('warga/'+nik).get().then(function(s){
+if(s.exists()){
+let d = s.val();
+document.getElementById('hnama').innerText = d.nama;
+document.getElementById('hsaldo').innerText = d.saldo + ' POIN';
+document.getElementById('hrp').innerText = 'Rp ' + (d.saldo * KONVERSI).toLocaleString();
+document.getElementById('hasil').classList.remove('hidden');
+}
+});
+}
+
+function setor(){
+let nik = document.getElementById('snik').value.trim();
+let uang = parseInt(document.getElementById('rupiah').value);
+if(nik.length != 16 || !uang) return alert('Isi lengkap!');
+let poin = Math.floor(uang/100);
+db.ref('warga/'+nik).transaction(function(s){
+if(s){
+return {saldo: (s.saldo||0) + poin};
+}
+}).then(function(){
+alert('Berhasil +' + poin + ' POIN');
+kembali();
+}).catch(function(e){
+alert('Gagal: ' + e.message);
+});
+}
+
+var saldoMedis = 0;
+function cekMedis(){
+var nik = document.getElementById('mnik').value.trim();
+if(nik.length != 16) return;
+db.ref('warga/'+nik).get().then(function(s){
+if(s.exists()){
+saldoMedis = s.val().saldo || 0;
+document.getElementById('medis-saldo').innerText = 'Saldo: ' + saldoMedis + ' POIN';
+document.getElementById('medis-info').classList.remove('hidden');
+}
+});
+}
+
+function bayar(){
+var nik = document.getElementById('mnik').value.trim();
+var uang = parseInt(document.getElementById('biaya').value);
+var cat = document.getElementById('catatan').value.trim();
+if(!nik || !uang || !cat) return alert('Isi lengkap!');
+var poin = Math.floor(uang/100);
+if(saldoMedis < poin) return alert('Saldo kurang!');
+db.ref('warga/'+nik).transaction(function(s){
+if(s){
+return {saldo: s.saldo - poin};
+}
+}).then(function(){
+db.ref('warga/'+nik+'/medis').push({tgl: new Date().toLocaleDateString(), cat: cat});
+alert('Berhasil -' + poin + ' POIN');
+kembali();
+}).catch(function(e){
+alert('Gagal: ' + e.message);
+});
+}
+</script>
+</body>
+</html>
